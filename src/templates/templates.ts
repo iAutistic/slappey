@@ -7,9 +7,21 @@ export function getEnvTemplate(token: string, prefix: string) {
 export function getMainFile() {
   return `
 const { Client } = require('discord.js');
+const mongoose = require("mongoose");
 const { registerCommands, registerEvents } = require('./utils/registry');
 const config = require('../slappey.json');
 const client = new Client();
+
+mongoose.connect(
+  "mongodb://localhost:27017/bot",
+  {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+    useCreateIndex: true,
+  },
+
+  console.log("DataBase connected")
+);
 
 (async () => {
   client.commands = new Map();
@@ -28,6 +40,17 @@ import { registerCommands, registerEvents } from './utils/registry';
 import config from '../slappey.json';
 import DiscordClient from './client/client';
 const client = new DiscordClient({});
+
+mongoose.connect(
+  "mongodb://localhost:27017/bot",
+  {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+    useCreateIndex: true,
+  },
+
+  console.log("DataBase connected")
+);
 
 (async () => {
   client.prefix = config.prefix || client.prefix;
@@ -154,10 +177,16 @@ module.exports = {
 
 export function getBaseCommand() {
   return `module.exports = class BaseCommand {
-  constructor(name, category, aliases) {
+  constructor({ name, category, aliases, description, usage, examples, permissions, cooldown }) {
     this.name = name;
     this.category = category;
-    this.aliases = aliases;
+    if (aliases) {
+      this.aliases = aliases || [];
+    this.description = description;
+    this.usage = usage;
+    this.examples = examples;
+    this.permissions = permissions;
+    this.cooldown = cooldown;
   }
 }`;
 }
@@ -173,6 +202,11 @@ export default abstract class BaseCommand {
   getName(): string { return this.name; }
   getCategory(): string { return this.category; }
   getAliases(): Array<string> { return this.aliases; }
+  getDescription(): string { return this.description; }
+  getUsage(): Array<string> { return this.usage; }
+  getExamples(): Array<string> { return this.examples; }
+  getPermissions(): Array<string> { return this.permissions }
+  getCooldown(): number { return this.cooldown; }
 
   abstract run(client: DiscordClient, message: Message, args: Array<string> | null): Promise<void>;
 }`;
@@ -207,7 +241,10 @@ module.exports = class ReadyEvent extends BaseEvent {
     super('ready');
   }
   async run (client) {
-    console.log(client.user.tag + ' has logged in.');
+      await client.user.setPresence({
+      activity: { name: "Loading...", type: "PLAYING" },
+      status: "dnd",
+    });
   }
 }`;
 }
@@ -221,13 +258,18 @@ export default class ReadyEvent extends BaseEvent {
     super('ready');
   }
   async run (client: DiscordClient) {
-    console.log('Bot has logged in.');
+      await client.user.setPresence({
+      activity: { name: "Loading...", type: "PLAYING" },
+      status: "dnd",
+    });
   }
 }`;
 }
 
 export function getMessageEvent() {
   return `const BaseEvent = require('../../utils/structures/BaseEvent');
+const cooldowns = new Map();
+const { Collection } = require("discord.js");
 
 module.exports = class MessageEvent extends BaseEvent {
   constructor() {
@@ -235,14 +277,47 @@ module.exports = class MessageEvent extends BaseEvent {
   }
   
   async run(client, message) {
-    if (message.author.bot) return;
+ if (message.author.bot) return;
     if (message.content.startsWith(client.prefix)) {
       const [cmdName, ...cmdArgs] = message.content
-      .slice(client.prefix.length)
-      .trim()
-      .split(/\\s+/);
+        .slice(client.prefix.length)
+        .trim()
+        .split(/\s+/);
       const command = client.commands.get(cmdName);
+
       if (command) {
+        if (message.guild) {
+          if (!message.member.hasPermission(command.permissions)) {
+            return;
+          }
+        }
+
+        if (!cooldowns.has(command.name)) {
+          cooldowns.set(command.name, new Collection());
+        }
+
+        const current_time = Date.now();
+        const time_stamps = cooldowns.get(command.name);
+        const cooldown_amount = command.cooldown * 1000;
+
+        if (time_stamps.has(message.author.id)) {
+          const expiration_time =
+            time_stamps.get(message.author.id) + cooldown_amount;
+
+          if (current_time < expiration_time) {
+            const time_left = (expiration_time - current_time) / 1000;
+
+            return message.channel.send(
+              \`Cooldown (\${time_left.toFixed(0)}) Seconds\`
+            );
+          }
+        }
+
+        time_stamps.set(message.author.id, current_time);
+        setTimeout(() => {
+          time_stamps.delete(message.author.id);
+        }, cooldown_amount);
+
         command.run(client, message, cmdArgs);
       }
     }
@@ -252,8 +327,9 @@ module.exports = class MessageEvent extends BaseEvent {
 
 export function getMessageEventTS() {
   return `import BaseEvent from '../../utils/structures/BaseEvent';
-import { Message } from 'discord.js';
+import { Collection , Message } from 'discord.js';
 import DiscordClient from '../../client/client';
+import cooldowns = new Map();
 
 export default class MessageEvent extends BaseEvent {
   constructor() {
@@ -261,14 +337,47 @@ export default class MessageEvent extends BaseEvent {
   }
 
   async run(client: DiscordClient, message: Message) {
-    if (message.author.bot) return;
+     if (message.author.bot) return;
     if (message.content.startsWith(client.prefix)) {
       const [cmdName, ...cmdArgs] = message.content
         .slice(client.prefix.length)
         .trim()
-        .split(/\\s+/);
+        .split(/\s+/);
       const command = client.commands.get(cmdName);
+
       if (command) {
+        if (message.guild) {
+          if (!message.member.hasPermission(command.permissions)) {
+            return;
+          }
+        }
+
+        if (!cooldowns.has(command.name)) {
+          cooldowns.set(command.name, new Collection());
+        }
+
+        const current_time = Date.now();
+        const time_stamps = cooldowns.get(command.name);
+        const cooldown_amount = command.cooldown * 1000;
+
+        if (time_stamps.has(message.author.id)) {
+          const expiration_time =
+            time_stamps.get(message.author.id) + cooldown_amount;
+
+          if (current_time < expiration_time) {
+            const time_left = (expiration_time - current_time) / 1000;
+
+            return message.channel.send(
+              \`Cooldown (\${time_left.toFixed(0)}) Seconds\`
+            );
+          }
+        }
+
+        time_stamps.set(message.author.id, current_time);
+        setTimeout(() => {
+          time_stamps.delete(message.author.id);
+        }, cooldown_amount);
+
         command.run(client, message, cmdArgs);
       }
     }
@@ -281,7 +390,16 @@ export function getTestCommand() {
 
 module.exports = class TestCommand extends BaseCommand {
   constructor() {
-    super('test', 'testing', []);
+    super({
+      name: 'test',
+      category: 'testing', 
+      aliases: [], 
+      description: "testing command",
+      usage: [""],
+      examples: [""],
+      permissions: [],
+      cooldown: 3,
+    });
   }
 
   async run(client, message, args) {
@@ -297,7 +415,16 @@ import DiscordClient from '../../client/client';
 
 export default class TestCommand extends BaseCommand {
   constructor() {
-    super('test', 'testing', []);
+    super({
+      name: 'test',
+      category: 'testing', 
+      aliases: [''], 
+      description: 'testing',
+      usage: [''],
+      examples: [''],
+      permissions: [],
+      cooldown: 0,
+    });
   }
 
   async run(client: DiscordClient, message: Message, args: Array<string>) {
@@ -311,7 +438,16 @@ export function getCommandTemplate(name: string, category: string) {
 
 module.exports = class ${capitalize(name)}Command extends BaseCommand {
   constructor() {
-    super('${name}', '${category}', []);
+    super({
+      name: '${name}',
+      category: '${category}', 
+      aliases: [], 
+      description: "",
+      usage: [],
+      examples: [],
+      permissions: [],
+      cooldown: 0,  
+  });
   }
 
   run(client, message, args) {
@@ -327,7 +463,16 @@ import DiscordClient from '../../client/client';
 
 export default class ${capitalize(name)}Command extends BaseCommand {
   constructor() {
-    super('${name}', '${category}', []);
+    super({
+      name: '${name}',
+      category: '${category}', 
+      aliases: [], 
+      description: "",
+      usage: [],
+      examples: [],
+      permissions: [],
+      cooldown: 0,  
+  });
   }
 
   async run(client: DiscordClient, message: Message, args: Array<string>) {
